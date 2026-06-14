@@ -66,6 +66,16 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
+/// Hint the kernel to read the mapping sequentially and start readahead.
+/// `madvise` is Unix-only; a no-op elsewhere (e.g. Windows).
+#[cfg(unix)]
+fn prefetch(m: &Mmap) {
+    let _ = m.advise(memmap2::Advice::Sequential);
+    let _ = m.advise(memmap2::Advice::WillNeed);
+}
+#[cfg(not(unix))]
+fn prefetch(_m: &Mmap) {}
+
 #[inline]
 fn match_len_fwd(a: &[u8], b: &[u8], max: usize) -> usize {
     let mut m = 0;
@@ -314,12 +324,10 @@ fn create(base_path: &str, target_path: &str, patch_path: &str) -> std::io::Resu
     let t0 = Instant::now();
     let base_file = File::open(base_path)?;
     let base = Arc::new(unsafe { Mmap::map(&base_file)? });
-    let _ = base.advise(memmap2::Advice::Sequential);
-    let _ = base.advise(memmap2::Advice::WillNeed); // kick off async kernel readahead
+    prefetch(&base);
     let target_file = File::open(target_path)?;
     let target = Arc::new(unsafe { Mmap::map(&target_file)? });
-    let _ = target.advise(memmap2::Advice::Sequential);
-    let _ = target.advise(memmap2::Advice::WillNeed);
+    prefetch(&target);
     let target_len = target.len();
 
     let base_filename = Path::new(base_path)

@@ -43,8 +43,12 @@ fn apply(base_path: &str, patch_path: &str, out_path: &str) -> std::io::Result<(
     let base_file = File::open(base_path)?;
     let base = Arc::new(unsafe { Mmap::map(&base_file)? });
     let base_len = base.len();
-    let _ = base.advise(memmap2::Advice::Sequential);
-    let _ = base.advise(memmap2::Advice::WillNeed); // async kernel readahead
+    // madvise readahead is Unix-only; skip on Windows.
+    #[cfg(unix)]
+    {
+        let _ = base.advise(memmap2::Advice::Sequential);
+        let _ = base.advise(memmap2::Advice::WillNeed);
+    }
 
     // Validate the base hash on a background thread, overlapped with the
     // reconstruction below (joined before we report success). The original
