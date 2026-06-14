@@ -75,8 +75,12 @@ fn apply(base_path: &str, patch_path: &str, out_path: &str) -> std::io::Result<(
 
     eprintln!("Applying patch...");
 
-    // pf is positioned right after the header.
-    let dec = Decompressor::new(pf, 1 << 16);
+    // pf is positioned right after the header. Pick the decoder from the codec
+    // recorded in the magic bytes.
+    let dec: Box<dyn Read> = match header.codec {
+        dverust::Codec::Brotli => Box::new(Decompressor::new(pf, 1 << 16)),
+        dverust::Codec::Zstd => Box::new(zstd::stream::read::Decoder::new(pf)?),
+    };
     let mut r = BufReader::with_capacity(1 << 20, dec);
 
     let mut bytes_written: usize = 0;

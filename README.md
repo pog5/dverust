@@ -1,17 +1,21 @@
 # dverust — a fast Rust rewrite of DumbVersion
 
-Drop-in, **format-compatible** reimplementation of
+Faster reimplementation of
 [DumbVersion](https://github.com/thecatontheceiling/DumbVersion) (`.dvp` ISO
-delta patches) in Rust. Produces and consumes the exact same `.dvp` byte format
-as the original C# NativeAOT tools — patches cross-apply in both directions.
+delta patches) in Rust.
 
 * `dvcreate <base> <target> <out.dvp>` — create a patch (≈ `DumbVersionCreator`)
 * `dvapply -o <out> <base> <patch.dvp>` — apply a patch (≈ `DumbVersionPatcher`)
 
+`dvapply` auto-detects the codec from the patch and **applies both the original
+C# Brotli patches and dverust's default zstd patches**. By default `dvcreate`
+writes **zstd** patches (faster + smaller, see below); `DV_CODEC=brotli` writes
+the original byte-format that the C# `DumbVersionPatcher` can also apply.
+
 ## Why it's faster
 
 The algorithm is a faithful port (FastCDC chunking, XXH3 chunk hashes, sorted
-chunk index, 8-byte SIMD match extension, base + target self-dedup, Brotli
+chunk index, 8-byte SIMD match extension, base + target self-dedup, compressed
 command stream, SHA-256 validation). The speedups are structural:
 
 1. **Parallel base indexing.** The base ISO is split into per-core segments and
@@ -36,16 +40,40 @@ original).
 
 ### Measured (24-core box, warm page cache, hyperfine)
 
+dverust (zstd default) vs the C# NativeAOT build (Brotli), each using its own
+native format:
+
 | operation | DumbVersion (C# AOT) | dverust (Rust) | speedup |
 |---|---:|---:|---:|
-| XP create (589 MB → 630 MB)    | 2.86 s | 2.01 s | **1.42×** |
-| win11 create (8.2 GB → 8.1 GB) | 18.74 s | 4.47 s | **4.19×** |
-| XP apply                       | 1.36 s | 0.99 s | **1.37×** |
-| win11 apply                    | 14.08 s | 11.41 s | **1.23×** |
+| XP create (589 MB → 630 MB)    | 2.85 s | 1.33 s | **2.14×** |
+| win11 create (8.2 GB → 8.1 GB) | 18.75 s | 3.99 s | **4.70×** |
+| XP apply                       | 1.15 s | 0.62 s | **1.84×** |
+| win11 apply                    | 12.30 s | 8.80 s | **1.40×** |
 
-Patches are the same size as the C# tool's (win11: 435,193,662 vs 435,296,933 —
-the Rust patch is actually ~100 KB smaller) and `xdelta3` is beaten on size and
-speed in every scenario. See `../bench.sh` and `../verify.sh`.
+Patch sizes are comparable: win11 434.27 MB vs 435.30 MB (~1 MB smaller), XP
+355.93 MB vs 355.88 MB (49 KB / 0.014 % larger — compressor noise). `xdelta3`
+is beaten on size and speed in every scenario. See `../bench.sh`, `../verify.sh`.
+
+### Compression codec — zstd by default
+
+The compression layer, not the chunker, was the remaining lever. **zstd
+(multithreaded, level 9) beats Brotli-q4 on every axis** on both ISO pairs:
+
+| operation     | Brotli-q4 | zstd-9  | result            |
+|---------------|----------:|--------:|-------------------|
+| XP create     | 2.01 s    | 1.25 s  | 1.60× faster      |
+| win11 create  | 4.99 s    | 4.37 s  | 1.14× faster      |
+| XP apply      | 945 ms    | 707 ms  | 1.34× faster      |
+| win11 apply   | 8.63 s    | 8.58 s  | tie (I/O-bound)   |
+| XP size       | 356.11 MB | 355.93 MB | smaller         |
+| win11 size    | 435.19 MB | 434.27 MB | −0.9 MB         |
+
+zstd is the default (`DV_CODEC=zstd`, level via `DV_ZSTD_L`, default 9). It uses
+a distinct magic (`DUMBVER\x02`), so zstd patches are **not** applicable by the
+C# `DumbVersionPatcher` (dverust applies both). `DV_CODEC=brotli` restores the
+original C#-cross-compatible format. The win11 apply is a tie because that path
+is dominated by 8 GB writeback + SHA-256, not decompression; the decode-bound XP
+apply shows zstd's real decompress advantage.
 
 ### Chunker frontier
 
@@ -83,8 +111,10 @@ the last second of create time.
 
 ### Other tunables
 
-* `DV_BROTLI_Q` (default `4`) — Brotli quality. `4` matches .NET
-  `CompressionLevel.Optimal`. `11` = `SmallestSize` (much slower, smaller).
+* `DV_CODEC` (default `zstd`) — `zstd` or `brotli` (Brotli = C#-compatible).
+* `DV_ZSTD_L` (default `9`) — zstd level. Higher = smaller/slower; >15 rarely
+  pays off because the insert bytes are already-compressed ISO data.
+* `DV_BROTLI_Q` (default `4`) — Brotli quality (matches .NET `Optimal`).
 * `DV_BROTLI_W` (default `22`) — Brotli window (lgwin).
 
 ## On io_uring

@@ -303,6 +303,13 @@ fn create(base_path: &str, target_path: &str, patch_path: &str) -> std::io::Resu
     let q: u32 = std::env::var("DV_BROTLI_Q").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
     let lgwin: u32 = std::env::var("DV_BROTLI_W").ok().and_then(|v| v.parse().ok()).unwrap_or(22);
     let ck = Chunker::from_env();
+    // Default zstd-9: faster create + apply and smaller patches than Brotli.
+    // DV_CODEC=brotli restores the original C#-cross-compatible format.
+    let codec = match std::env::var("DV_CODEC").as_deref() {
+        Ok("brotli") => dverust::Codec::Brotli,
+        _ => dverust::Codec::Zstd,
+    };
+    let zstd_level: i32 = std::env::var("DV_ZSTD_L").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
 
     let t0 = Instant::now();
     let base_file = File::open(base_path)?;
@@ -365,41 +372,56 @@ fn create(base_path: &str, target_path: &str, patch_path: &str) -> std::io::Resu
         .map(|&(s, e)| diff_segment(&base, &records, &target, s, e, ck))
         .collect();
 
-    // ---- serial serialisation into the single Brotli stream ----
-    let mut out = File::create(patch_path)?;
-    out.seek(SeekFrom::Start(header_size as u64))?;
-    let mut w = CompressorWriter::new(out, 1 << 16, q, lgwin);
-
-    let mut last_base_offset: i64 = 0;
-    for seg_ins in &segments {
-        for ins in seg_ins {
-            match *ins {
-                Ins::Copy { src, len } => {
-                    w.write_all(&[Cmd::Copy as u8])?;
-                    write_varint(&mut w, encode_zigzag(src - last_base_offset))?;
-                    write_varint(&mut w, len)?;
-                    last_base_offset = src + len as i64;
-                }
-                Ins::CopyTarget { distance, len } => {
-                    w.write_all(&[Cmd::CopyTarget as u8])?;
-                    write_varint(&mut w, distance)?;
-                    write_varint(&mut w, len)?;
-                }
-                Ins::Insert { off, len } => {
-                    w.write_all(&[Cmd::Insert as u8])?;
-                    write_varint(&mut w, len)?;
-                    w.write_all(&target[off as usize..(off + len) as usize])?;
+    // ---- serial serialisation into the single compressed stream ----
+    let serialize = |w: &mut dyn Write| -> std::io::Result<()> {
+        let mut last_base_offset: i64 = 0;
+        for seg_ins in &segments {
+            for ins in seg_ins {
+                match *ins {
+                    Ins::Copy { src, len } => {
+                        w.write_all(&[Cmd::Copy as u8])?;
+                        write_varint(w, encode_zigzag(src - last_base_offset))?;
+                        write_varint(w, len)?;
+                        last_base_offset = src + len as i64;
+                    }
+                    Ins::CopyTarget { distance, len } => {
+                        w.write_all(&[Cmd::CopyTarget as u8])?;
+                        write_varint(w, distance)?;
+                        write_varint(w, len)?;
+                    }
+                    Ins::Insert { off, len } => {
+                        w.write_all(&[Cmd::Insert as u8])?;
+                        write_varint(w, len)?;
+                        w.write_all(&target[off as usize..(off + len) as usize])?;
+                    }
                 }
             }
         }
-    }
-    w.write_all(&[Cmd::Eof as u8])?;
-    w.flush()?;
-    let mut out = w.into_inner();
+        w.write_all(&[Cmd::Eof as u8])
+    };
+
+    let mut out = File::create(patch_path)?;
+    out.seek(SeekFrom::Start(header_size as u64))?;
+    let mut out = match codec {
+        dverust::Codec::Brotli => {
+            let mut w = CompressorWriter::new(out, 1 << 16, q, lgwin);
+            serialize(&mut w)?;
+            w.flush()?;
+            w.into_inner()
+        }
+        dverust::Codec::Zstd => {
+            let mut w = zstd::stream::write::Encoder::new(out, zstd_level)?;
+            // Multithreaded compression: the serial Brotli pass is replaced by a
+            // worker pool, so the compress step scales with cores on big inserts.
+            let _ = w.multithread(rayon::current_num_threads() as u32);
+            serialize(&mut w)?;
+            w.finish()?
+        }
+    };
 
     let base_hash = bh.join().expect("base hash thread panicked");
     let target_hash = th.join().expect("target hash thread panicked");
-    let header = Header { target_size: target_len as i64, base_hash, target_hash, base_filename };
+    let header = Header { target_size: target_len as i64, base_hash, target_hash, base_filename, codec };
     debug_assert_eq!(header.size(), header_size);
     out.seek(SeekFrom::Start(0))?;
     header.write(&mut out)?;

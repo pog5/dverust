@@ -5,7 +5,14 @@ pub mod fastcdc;
 
 use std::io::{self, Read, Write};
 
-pub const MAGIC: &[u8] = b"DUMBVER\x01";
+pub const MAGIC: &[u8] = b"DUMBVER\x01"; // brotli body — the original, C#-compatible format
+pub const MAGIC_ZSTD: &[u8] = b"DUMBVER\x02"; // zstd body — dverust extension
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Codec {
+    Brotli,
+    Zstd,
+}
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,7 +35,7 @@ pub fn decode_zigzag(v: u64) -> i64 {
 
 /// LEB128 unsigned varint (matches .NET Write7BitEncodedInt64).
 #[inline]
-pub fn write_varint<W: Write>(w: &mut W, value: u64) -> io::Result<()> {
+pub fn write_varint<W: Write + ?Sized>(w: &mut W, value: u64) -> io::Result<()> {
     let mut v = value;
     let mut buf = [0u8; 10];
     let mut n = 0;
@@ -67,6 +74,7 @@ pub struct Header {
     pub base_hash: [u8; 32],
     pub target_hash: [u8; 32],
     pub base_filename: String,
+    pub codec: Codec,
 }
 
 impl Header {
@@ -75,7 +83,10 @@ impl Header {
     }
 
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        w.write_all(MAGIC)?;
+        w.write_all(match self.codec {
+            Codec::Brotli => MAGIC,
+            Codec::Zstd => MAGIC_ZSTD,
+        })?;
         w.write_all(&self.target_size.to_le_bytes())?;
         w.write_all(&self.base_hash)?;
         w.write_all(&self.target_hash)?;
@@ -88,9 +99,13 @@ impl Header {
     pub fn read<R: Read>(r: &mut R) -> io::Result<Header> {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        if magic != MAGIC {
+        let codec = if magic == MAGIC {
+            Codec::Brotli
+        } else if magic == MAGIC_ZSTD {
+            Codec::Zstd
+        } else {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid patch file."));
-        }
+        };
         let mut sz = [0u8; 8];
         r.read_exact(&mut sz)?;
         let target_size = i64::from_le_bytes(sz);
@@ -107,6 +122,6 @@ impl Header {
         let mut fnbuf = vec![0u8; fnlen];
         r.read_exact(&mut fnbuf)?;
         let base_filename = String::from_utf8_lossy(&fnbuf).into_owned();
-        Ok(Header { target_size, base_hash, target_hash, base_filename })
+        Ok(Header { target_size, base_hash, target_hash, base_filename, codec })
     }
 }
