@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "dverust"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "brotli",
  "memmap2",
