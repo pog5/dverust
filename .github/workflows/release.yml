@@ -1,0 +1,76 @@
+name: release
+
+# Build dvcreate (creator) + dvapply (patcher) for every target and attach the
+# archives to a GitHub Release. Triggered by pushing a version tag, e.g.:
+#   git tag v1.2.0 && git push origin v1.2.0
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build/release (e.g. v1.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64
+            target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - label: linux-musl-x64
+            target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - label: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - label: windows-x64
+            target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - label: windows-arm64
+            target: aarch64-pc-windows-msvc
+            os: windows-latest
+          - label: macos-x64
+            target: x86_64-apple-darwin
+            os: macos-latest
+          - label: macos-arm64
+            target: aarch64-apple-darwin
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Builds both binaries, packs them into one archive per target
+      # (.tar.gz on unix, .zip on windows), generates a SHA-256 checksum, and
+      # uploads everything to the Release for this tag. Linux musl/arm64 are
+      # cross-built automatically (cross / cross-toolchain) by the action.
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: dvcreate,dvapply
+          target: ${{ matrix.target }}
+          archive: dverust-$tag-${{ matrix.label }}
+          tar: unix
+          zip: windows
+          leading_dir: true
+          include: README.md
+          checksum: sha256
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
