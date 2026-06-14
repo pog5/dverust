@@ -1,34 +1,30 @@
 # dverust
 
-A faster Rust rewrite of [DumbVersion](https://github.com/thecatontheceiling/DumbVersion)
-(`.dvp` ISO delta patches).
+A drop-in, much faster replacement for
+[DumbVersion](https://github.com/thecatontheceiling/DumbVersion) — the tool for
+distributing ISOs as small `.dvp` delta patches.
 
-* `dvcreate <base> <target> <out.dvp>` — create a patch (≈ `DumbVersionCreator`)
-* `dvapply -o <out> <base> <patch.dvp>` — apply a patch (≈ `DumbVersionPatcher`)
+**Why use it**
 
-## Build
+- **Faster.** Creates patches several times quicker than the original, and
+  applies them faster too.
+- **Drop-in.** It still reads your existing DumbVersion patches — nothing to
+  re-download or convert.
+- **Everywhere.** Prebuilt binaries for Linux, Windows and macOS (x64 + arm64)
+  on the [releases page](https://github.com/pog5/dverust/releases).
+- **Same small patches** (or slightly smaller).
 
+## Use it
+
+```sh
+# apply a patch: base ISO + patch -> rebuilt ISO
+dvapply -o windows.iso base.iso windows.dvp
+
+# create a patch from two ISOs
+dvcreate base.iso target.iso out.dvp
 ```
-cargo build --release
-```
 
-Binaries land in `target/release/{dvcreate,dvapply}`. Prebuilt binaries for
-Linux/Windows/macOS (x64 + arm64) are on the [releases page](https://github.com/pog5/dverust/releases).
+Or build from source: `cargo build --release` → `target/release/{dvcreate,dvapply}`.
 
-## Compatibility
-
-`dvcreate` writes **zstd** patches by default. `dvapply` reads both zstd and the
-original C# Brotli format. For patches the upstream C# `DumbVersionPatcher` can
-also apply, create with `DV_CODEC=brotli`.
-
-## Tunables (env vars)
-
-| var | default | notes |
-|-----|---------|-------|
-| `DV_CODEC` | `zstd` | `zstd` or `brotli` (Brotli = C#-compatible) |
-| `DV_ZSTD_L` | `9` | zstd level |
-| `DV_CDC_BITS` | `8` | FastCDC average chunk size = `2^bits` |
-| `DV_CHUNKER` | `fastcdc` | also `gear`, `ram`, `ae`, `fixed` |
-| `DV_SEGMENTS` | `1` | split create across N segments for more parallelism |
-
-Defaults are tuned; the knobs are there for experimentation.
+By default new patches use zstd; pass `DV_CODEC=brotli` to `dvcreate` if you need
+a patch the original C# `DumbVersionPatcher` can also apply.
