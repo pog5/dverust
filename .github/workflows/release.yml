@@ -20,8 +20,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Create the GitHub Release once; the matrix jobs below upload into it.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   release:
     name: ${{ matrix.label }}
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
