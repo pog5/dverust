@@ -18,16 +18,26 @@ use dverust::{encode_zigzag, write_varint, Cmd, Header};
 enum Chunker {
     Fast(fastcdc::Params),
     Ae { w: usize, max: usize },
+    Ram { w: usize, max: usize },
+    Gear { mask: u32, min: usize, max: usize },
+    Fixed { size: usize },
+}
+
+fn env_usize(k: &str, d: usize) -> usize {
+    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
 }
 
 impl Chunker {
     fn from_env() -> Self {
         match std::env::var("DV_CHUNKER").as_deref() {
-            Ok("ae") => {
-                let w: usize = std::env::var("DV_AE_W").ok().and_then(|v| v.parse().ok()).unwrap_or(94);
-                let max: usize = std::env::var("DV_AE_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
-                Chunker::Ae { w, max }
-            }
+            Ok("ae") => Chunker::Ae { w: env_usize("DV_AE_W", 94), max: env_usize("DV_MAX", 1024) },
+            Ok("ram") => Chunker::Ram { w: env_usize("DV_RAM_W", 70), max: env_usize("DV_MAX", 1024) },
+            Ok("gear") => Chunker::Gear {
+                mask: env_usize("DV_GEAR_MASK", 0xFF) as u32,
+                min: env_usize("DV_MIN", 64),
+                max: env_usize("DV_MAX", 1024),
+            },
+            Ok("fixed") => Chunker::Fixed { size: env_usize("DV_FIXED", 256) },
             _ => Chunker::Fast(fastcdc::Params::from_env()),
         }
     }
@@ -36,13 +46,17 @@ impl Chunker {
         match self {
             Chunker::Fast(p) => fastcdc::cdc_offset_p(data, p),
             Chunker::Ae { w, max } => fastcdc::ae_offset(data, *w, *max),
+            Chunker::Ram { w, max } => fastcdc::ram_offset(data, *w, *max),
+            Chunker::Gear { mask, min, max } => fastcdc::gear_offset(data, *mask, *min, *max),
+            Chunker::Fixed { size } => fastcdc::fixed_offset(data, *size),
         }
     }
     #[inline]
     fn max(&self) -> usize {
         match self {
             Chunker::Fast(p) => p.max,
-            Chunker::Ae { max, .. } => *max,
+            Chunker::Ae { max, .. } | Chunker::Ram { max, .. } | Chunker::Gear { max, .. } => *max,
+            Chunker::Fixed { size } => *size,
         }
     }
 }

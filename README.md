@@ -49,12 +49,28 @@ speed in every scenario. See `../bench.sh` and `../verify.sh`.
 
 ### Chunker frontier
 
-FastCDC was benchmarked against larger-chunk FastCDC variants (`DV_CDC_BITS`) and
-a different family, AE (Asymmetric Extremum). On the win11 pair, **nothing beat
-FastCDC-256 on both axes**: larger FastCDC chunks are faster but produce larger
-patches; AE finds marginally better boundaries (−0.2 % size) but is 2.7× slower.
-So FastCDC-256 stays the default. `DV_CDC_BITS=9` is a near-Pareto option (~30 %
-faster create for +0.5 % size) for anyone who wants it.
+Five chunking families were benchmarked on the win11 pair against the FastCDC-256
+default (`DV_CHUNKER`, `DV_CDC_BITS`, …). **None beats FastCDC on both create
+speed and patch size:**
+
+| chunker            | create | patch size  | vs default        |
+|--------------------|-------:|------------:|-------------------|
+| FastCDC-256 (def)  | 4.58 s | 435.19 MB   | —                 |
+| Gear-256 (1 mask)  | 4.11 s | 435.41 MB   | faster, +0.05 %   |
+| Gear-512           | 3.47 s | 437.31 MB   | faster, +0.5 %    |
+| RAM (w=128)        | 3.41 s | 451.18 MB   | faster, +3.7 %    |
+| RAM (w=240)        | 3.41 s | 466.55 MB   | faster, +7.2 %    |
+| AE (w=94)          | 16.9 s | 434.18 MB   | slower, −0.23 %   |
+| fixed-256          | 45.8 s | 8.16 GB     | no dedup at all   |
+| FastCDC b9–b12     | 3.4 s  | 437–482 MB  | faster, bigger    |
+
+FastCDC's normalized two-mask chunking packs more anchor points (35 M chunks vs
+Gear's 27.6 M) for slightly better dedup at the same average size — Gear is ~10 %
+faster but ~0.05 % larger; the extremum families (AE/RAM) either cost speed or
+size; fixed-size shows why content-defined chunking exists (a single insertion
+shifts every boundary, so the patch degenerates to the whole ISO). FastCDC-256
+is the sweet spot and stays the default. All alternatives remain selectable via
+env vars for experimentation.
 
 ### Optional: `DV_SEGMENTS`
 

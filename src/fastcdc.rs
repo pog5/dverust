@@ -91,6 +91,58 @@ pub fn cdc_offset_p(data: &[u8], p: &Params) -> usize {
     i
 }
 
+/// Plain Gear CDC: a single mask, no normalized two-region split, no
+/// cut-point-skipping beyond `min`. This is what FastCDC improves on — faster
+/// per byte (one branch), but a wider chunk-size distribution.
+#[inline]
+pub fn gear_offset(data: &[u8], mask: u32, min: usize, max: usize) -> usize {
+    let len = data.len().min(max);
+    let mut hash: u32 = 0;
+    let mut i = 0usize;
+    while i < len {
+        hash = (hash >> 1).wrapping_add(GEAR[data[i] as usize]);
+        i += 1;
+        if i >= min && (hash & mask) == 0 {
+            return i;
+        }
+    }
+    len
+}
+
+/// RAM (Rapid Asymmetric Maximum) chunking. Take the max byte `m` over a fixed
+/// `w`-byte window at the chunk start, then cut at the first later byte that
+/// strictly exceeds `m`. One comparison per byte, no rolling hash, no window
+/// slide — the fastest of the extremum family. `w` controls expected size.
+#[inline]
+pub fn ram_offset(data: &[u8], w: usize, max: usize) -> usize {
+    let len = data.len().min(max);
+    if len <= w {
+        return len;
+    }
+    let mut m = 0u8;
+    for &b in &data[..w] {
+        if b > m {
+            m = b;
+        }
+    }
+    let mut i = w;
+    while i < len {
+        if data[i] > m {
+            return i + 1;
+        }
+        i += 1;
+    }
+    len
+}
+
+/// Fixed-size chunking — no content defined boundaries at all. Fastest possible,
+/// but any insertion/deletion shifts every subsequent boundary, destroying
+/// dedup. Included as a baseline to show why CDC is needed.
+#[inline]
+pub fn fixed_offset(data: &[u8], size: usize) -> usize {
+    data.len().min(size)
+}
+
 /// AE (Asymmetric Extremum) content-defined chunking — a different family from
 /// FastCDC. Cuts at the first byte that is a strict maximum over the preceding
 /// `window` bytes (interrupting only when a larger value appears). No rolling
