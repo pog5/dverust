@@ -52,7 +52,7 @@ native format:
 
 Patch sizes are comparable: win11 434.27 MB vs 435.30 MB (~1 MB smaller), XP
 355.93 MB vs 355.88 MB (49 KB / 0.014 % larger — compressor noise). `xdelta3`
-is beaten on size and speed in every scenario. See `../bench.sh`, `../verify.sh`.
+is beaten on size and speed in every scenario.
 
 ### Compression codec — zstd by default
 
